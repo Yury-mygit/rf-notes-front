@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LiveNotes — Заметки</title>
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <span class="logo">Заметки</span>
+      <span id="status"></span>
+    </header>
+    <main>
+      <aside id="sessions">
+        <div class="sessions-toolbar">
+          <button id="new-session-btn" title="Создать встречу">+ Новая встреча</button>
+        </div>
+        <div id="sessions-list"><div class="hint">Загрузка…</div></div>
+      </aside>
+      <section id="feed"><div class="hint">Выберите встречу</div></section>
+    </main>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
