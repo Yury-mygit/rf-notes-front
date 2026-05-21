@@ -19,7 +19,16 @@
         </div>
         <div id="sessions-list"><div class="hint">Загрузка…</div></div>
       </aside>
-      <section id="feed"><div class="hint">Выберите встречу</div></section>
+      <section id="feed-pane">
+        <div id="entry-toolbar" hidden>
+          <button id="new-text-btn" title="Добавить текстовую заметку">📝 Текст</button>
+          <button id="new-photo-btn" title="Добавить фото">📷 Фото</button>
+          <button id="new-file-btn" title="Добавить файл">📎 Файл</button>
+          <input id="photo-input" type="file" accept="image/*" hidden>
+          <input id="file-input" type="file" hidden>
+        </div>
+        <div id="feed"><div class="hint">Выберите встречу</div></div>
+      </section>
     </main>
   </div>
   <script type="module" src="/src/main.js"></script>

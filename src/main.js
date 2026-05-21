@@ -27,13 +27,34 @@ function fmtSize(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
 }
 
+// ── Client ID (для X-Client-Id и фильтра echo от WS) ──────────────────────────
+// sessionStorage, не localStorage: у каждой вкладки свой id (переживает F5,
+// не шарится между вкладками одного домена — иначе вкладка B отфильтрует
+// события вкладки A как «свои echo»).
+
+const CLIENT_ID_KEY = 'notes.web.clientId';
+function getClientId() {
+  let id = sessionStorage.getItem(CLIENT_ID_KEY);
+  if (!id) {
+    id = 'web-' + randomUUID();
+    sessionStorage.setItem(CLIENT_ID_KEY, id);
+  }
+  return id;
+}
+const CLIENT_ID = getClientId();
+
 // ── API ───────────────────────────────────────────────────────────────────────
 
 const BASE = '/api/v1';
 const blobCache = new Map();
 
 async function apiFetch(path, opts = {}) {
-  const res = await fetch(BASE + path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-Client-Id': CLIENT_ID,
+    ...(opts.headers || {}),
+  };
+  const res = await fetch(BASE + path, { ...opts, headers });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     throw Object.assign(new Error(body || res.statusText), { status: res.status });
@@ -48,6 +69,22 @@ const api = {
   deleteSession: id =>
     apiFetch(`/sessions/${id}`, { method: 'DELETE' }),
   entries:  id => apiFetch(`/sessions/${id}/entries`).then(r => r.json()),
+  createEntry: (sessionId, body) =>
+    apiFetch(`/sessions/${sessionId}/entries`, { method: 'POST', body: JSON.stringify(body) }).then(r => r.json()),
+  uploadMedia: (entryId, file) =>
+    fetch(`${BASE}/entries/${entryId}/media`, {
+      method: 'PUT',
+      headers: {
+        'X-Client-Id': CLIENT_ID,
+        'X-Original-Name': encodeURIComponent(file.name),
+        'X-Mime-Type': file.type || 'application/octet-stream',
+        'Content-Type': 'application/octet-stream',
+      },
+      body: file,
+    }).then(r => {
+      if (!r.ok) throw new Error(`upload failed: ${r.status}`);
+      return r.json();
+    }),
   patch: (id, data) =>
     apiFetch(`/entries/${id}`, { method: 'PATCH', body: JSON.stringify(data) }).then(r => r.json()),
   blob: async (id, type = 'media') => {
@@ -314,9 +351,56 @@ async function deleteSession(s) {
     if (currentSessionId === s.id) {
       currentSessionId = null;
       document.getElementById('feed').innerHTML = '<div class="hint">Выберите встречу</div>';
+      document.getElementById('entry-toolbar').hidden = true;
     }
     await loadSessions();
     setStatus('Встреча удалена ✓');
+  } catch (e) {
+    setStatus(`Ошибка ${e.status ?? ''}: ${e.message}`, true);
+  }
+}
+
+// ── Создание записей ─────────────────────────────────────────────────────────
+
+async function createTextEntry() {
+  if (!currentSessionId) return;
+  const text = prompt('Текст заметки:');
+  if (!text || !text.trim()) return;
+  const now = Date.now();
+  try {
+    await api.createEntry(currentSessionId, {
+      id: randomUUID(),
+      sessionId: currentSessionId,
+      type: 'TEXT',
+      createdAt: now,
+      updatedAt: now,
+      textContent: text.trim(),
+    });
+    await openSession(currentSessionId);
+    setStatus('Заметка добавлена ✓');
+  } catch (e) {
+    setStatus(`Ошибка ${e.status ?? ''}: ${e.message}`, true);
+  }
+}
+
+async function createMediaEntry(type, file) {
+  if (!currentSessionId || !file) return;
+  const now = Date.now();
+  const id = randomUUID();
+  try {
+    await api.createEntry(currentSessionId, {
+      id,
+      sessionId: currentSessionId,
+      type,
+      createdAt: now,
+      updatedAt: now,
+      originalName: file.name,
+      mimeType: file.type || 'application/octet-stream',
+      fileSizeBytes: file.size,
+    });
+    await api.uploadMedia(id, file);
+    await openSession(currentSessionId);
+    setStatus(`${type === 'PHOTO' ? 'Фото' : 'Файл'} добавлено ✓`);
   } catch (e) {
     setStatus(`Ошибка ${e.status ?? ''}: ${e.message}`, true);
   }
@@ -328,6 +412,8 @@ async function openSession(id) {
   document.querySelectorAll('.session-item').forEach(el => {
     el.classList.toggle('active', el.dataset.id === id);
   });
+
+  document.getElementById('entry-toolbar').hidden = false;
 
   const feed = document.getElementById('feed');
   feed.innerHTML = '<div class="hint">Загрузка…</div>';
@@ -349,8 +435,68 @@ async function openSession(id) {
   }
 }
 
+// ── WebSocket push ────────────────────────────────────────────────────────────
+
+let ws = null;
+let wsBackoff = 1000;
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = `${proto}//${location.host}/api/v1/ws`;
+  ws = new WebSocket(url);
+
+  ws.addEventListener('open', () => {
+    console.log('[ws] open');
+    wsBackoff = 1000;
+  });
+
+  ws.addEventListener('message', ev => {
+    let evt;
+    try { evt = JSON.parse(ev.data); } catch { return; }
+    if (evt.type === 'ping') return;
+    console.log('[ws]', evt.type, evt.originClientId, evt.data?.id);
+    if (evt.originClientId === CLIENT_ID) return; // свой echo — игнорируем
+    handleWsEvent(evt);
+  });
+
+  ws.addEventListener('close', () => {
+    console.log(`[ws] close, reconnect in ${wsBackoff}ms`);
+    setTimeout(connectWS, wsBackoff);
+    wsBackoff = Math.min(wsBackoff * 2, 30_000);
+  });
+
+  ws.addEventListener('error', e => console.warn('[ws] error', e));
+}
+
+function handleWsEvent(evt) {
+  if (evt.type.startsWith('session.')) {
+    loadSessions();
+  } else if (evt.type.startsWith('entry.')) {
+    if (evt.data && evt.data.sessionId === currentSessionId) {
+      openSession(currentSessionId);
+    }
+  }
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 document.getElementById('new-session-btn').addEventListener('click', createSession);
+document.getElementById('new-text-btn').addEventListener('click', createTextEntry);
+
+const photoInput = document.getElementById('photo-input');
+const fileInput = document.getElementById('file-input');
+document.getElementById('new-photo-btn').addEventListener('click', () => photoInput.click());
+document.getElementById('new-file-btn').addEventListener('click', () => fileInput.click());
+photoInput.addEventListener('change', e => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (f) createMediaEntry('PHOTO', f);
+});
+fileInput.addEventListener('change', e => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (f) createMediaEntry('FILE', f);
+});
 
 loadSessions();
+connectWS();
