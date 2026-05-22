@@ -112,39 +112,37 @@ function renderSessions(sessions) {
     return;
   }
 
-  [...sessions]
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .forEach(s => {
-      const item = document.createElement('div');
-      item.className = 'session-item' + (s.id === currentSessionId ? ' active' : '');
-      item.dataset.id = s.id;
+  sessions.forEach(s => {
+    const item = document.createElement('div');
+    item.className = 'session-item' + (s.id === currentSessionId ? ' active' : '');
+    item.dataset.id = s.id;
 
-      const main = document.createElement('div');
-      main.className = 'session-main';
+    const main = document.createElement('div');
+    main.className = 'session-main';
 
-      const title = document.createElement('div');
-      title.className = 'session-title';
-      title.textContent = s.title || 'Без названия';
+    const title = document.createElement('div');
+    title.className = 'session-title';
+    title.textContent = s.title || 'Без названия';
 
-      const date = document.createElement('div');
-      date.className = 'session-date';
-      date.textContent = fmtDate(s.updatedAt);
+    const date = document.createElement('div');
+    date.className = 'session-date';
+    date.textContent = fmtDate(s.createdAt);
 
-      main.append(title, date);
+    main.append(title, date);
 
-      const del = document.createElement('button');
-      del.className = 'session-delete';
-      del.title = 'Удалить встречу';
-      del.textContent = '×';
-      del.addEventListener('click', e => {
-        e.stopPropagation();
-        deleteSession(s);
-      });
-
-      item.append(main, del);
-      item.addEventListener('click', () => openSession(s.id));
-      panel.appendChild(item);
+    const del = document.createElement('button');
+    del.className = 'session-delete';
+    del.title = 'Удалить встречу';
+    del.textContent = '×';
+    del.addEventListener('click', e => {
+      e.stopPropagation();
+      deleteSession(s);
     });
+
+    item.append(main, del);
+    item.addEventListener('click', () => openSession(s.id));
+    panel.appendChild(item);
+  });
 }
 
 // ── Entry rendering ───────────────────────────────────────────────────────────
